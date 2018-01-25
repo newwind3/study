@@ -1,0 +1,18 @@
+
+if !SND_USE_DYNAMIC_CONF
+
+choice SND_AK_DAC
+	prompt "Select DAC device"
+	depends on SND_AK_AUDIO
+	default SND_AK_CS4398
+
+config SND_AK_CS4398
+	bool "CS4398"
+
+endchoice
+
+config SND_AK_DAC_COUNT
+	int "Number of DACs"
+	default 1
+
+endif
