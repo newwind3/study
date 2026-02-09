@@ -1,0 +1,963 @@
+# tcpci_alert.c 함수별 상세 설명
+
+## 파일 개요
+
+**파일명**: `tcpci_alert.c`  
+**위치**: `MT83xx_T/kernel-5.15/drivers/misc/mediatek/typec/tcpc/`  
+**역할**: TCPC (Type-C Port Controller) 인터럽트 처리 및 알림 관리  
+**라인 수**: 560 라인
+
+이 파일은 TCPC 칩에서 발생하는 다양한 인터럽트(Alert)를 처리하고, Type-C 연결 상태 변화 및 PD 메시지 송수신 이벤트를 관리합니다.
+
+---
+
+## 함수 분류
+
+### 1. TCPC 인터럽트 핸들러 (Alert Handlers)
+### 2. VBUS 레벨 관리
+### 3. USB 포트 상태 보고
+### 4. Wake Lock 관리
+### 5. 전원 제어 보고
+
+---
+
+## 1. TCPC 인터럽트 핸들러
+
+### 1.1 `tcpci_alert_cc_changed()`
+
+```c
+static int tcpci_alert_cc_changed(struct tcpc_device *tcpc)
+```
+
+**목적**: CC (Configuration Channel) 라인 상태 변경 알림 처리
+
+**동작**:
+- CC 라인의 상태 변화 감지 시 호출됨
+- Type-C 연결/해제 감지의 핵심 함수
+- `tcpc_typec_handle_cc_change()` 호출하여 Type-C 상태 머신 업데이트
+
+**호출 시점**: Alert 레지스터의 bit 0 (CC_STATUS) 설정 시
+
+**반환값**: `tcpc_typec_handle_cc_change()`의 반환값
+
+**연관 함수**:
+- → `tcpc_typec_handle_cc_change()` (tcpci_typec.c)
+
+---
+
+### 1.2 `tcpci_alert_vsafe0v()`
+
+```c
+static inline int tcpci_alert_vsafe0v(struct tcpc_device *tcpc)
+```
+
+**목적**: VBUS가 안전한 0V 상태에 도달했음을 처리
+
+**동작**:
+1. `tcpc_typec_handle_vsafe0v()` 호출하여 Type-C 상태 업데이트
+2. PD가 활성화된 경우:
+   - `CONFIG_USB_PD_SAFE0V_DELAY` 설정 시: 타이머 시작
+   - 그렇지 않으면: 즉시 VBUS Safe0V 이벤트 발생
+
+**호출 시점**: VBUS가 0V에 도달했을 때
+
+**반환값**: 0 (성공)
+
+**연관 함수**:
+- → `tcpc_typec_handle_vsafe0v()` (tcpci_typec.c)
+- → `pd_put_vbus_safe0v_event()` (PD 이벤트)
+
+---
+
+### 1.3 `tcpci_alert_power_status_changed()`
+
+```c
+static int tcpci_alert_power_status_changed(struct tcpc_device *tcpc)
+```
+
+**목적**: 전원 상태 변경 알림 처리
+
+**동작**:
+1. `tcpci_get_power_status()` 호출하여 현재 전원 상태 읽기
+2. TCPCI v1.0 호환 모드인 경우 VBUS 레벨 변경 처리
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 
+- 성공: 0
+- 실패: 음수 에러 코드
+
+**호출 시점**: Alert 레지스터의 bit 1 (POWER_STATUS) 설정 시
+
+**연관 함수**:
+- → `tcpci_get_power_status()`
+- → `tcpci_vbus_level_changed()`
+
+---
+
+### 1.4 `tcpci_alert_tx_success()`
+
+```c
+static int tcpci_alert_tx_success(struct tcpc_device *tcpc)
+```
+
+**목적**: PD 메시지 전송 성공 (GoodCRC 수신) 처리
+
+**동작**:
+1. 전송 상태를 `PD_TX_STATE_GOOD_CRC`로 설정
+2. 동적 응답 시간 측정 (PD_DYNAMIC_SENDER_RESPONSE 활성화 시)
+3. VDM 전송이었는지 확인하여 적절한 이벤트 큐에 추가
+   - VDM: `pd_put_vdm_event()`
+   - 일반 메시지: `pd_put_event()`
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: Alert 레지스터의 bit 6 (TX_SUCCESS) 설정 시
+
+**연관 함수**:
+- → `pd_put_vdm_event()` / `pd_put_event()`
+
+---
+
+### 1.5 `tcpci_alert_tx_failed()`
+
+```c
+static int tcpci_alert_tx_failed(struct tcpc_device *tcpc)
+```
+
+**목적**: PD 메시지 전송 실패 (GoodCRC 미수신) 처리
+
+**동작**:
+1. 전송 상태를 `PD_TX_STATE_NO_GOOD_CRC`로 설정
+2. VDM 또는 일반 메시지에 따라 실패 이벤트 발생
+   - VDM: `vdm_put_hw_event(PD_HW_TX_FAILED)`
+   - 일반: `pd_put_hw_event(PD_HW_TX_FAILED)`
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: Alert 레지스터의 bit 4 (TX_FAILED) 설정 시
+
+**연관 함수**:
+- → `vdm_put_hw_event()` / `pd_put_hw_event()`
+
+---
+
+### 1.6 `tcpci_alert_tx_discard()`
+
+```c
+static int tcpci_alert_tx_discard(struct tcpc_device *tcpc)
+```
+
+**목적**: PD 메시지 전송 폐기 처리
+
+**동작**:
+1. 전송 상태를 `PD_TX_STATE_DISCARD`로 설정
+2. `TCPC_FLAGS_RETRY_CRC_DISCARD` 플래그 확인:
+   - 설정됨: 재전송 타이머 시작 (`PD_TIMER_DISCARD`)
+   - 설정 안 됨: 전송 실패로 처리
+3. VDM 전송인 경우 VDM 폐기 이벤트 발생
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: Alert 레지스터의 bit 5 (TX_DISCARDED) 설정 시
+
+**특이사항**: 
+- CRC 오류로 인한 폐기 시 재전송 메커니즘 제공
+- 재전송 지원 여부는 `CONFIG_USB_PD_RETRY_CRC_DISCARD` 설정에 따름
+
+**연관 함수**:
+- → `vdm_put_hw_event()` / `pd_put_hw_event()`
+- → `tcpc_enable_timer()`
+
+---
+
+### 1.7 `tcpci_alert_recv_msg()`
+
+```c
+static int tcpci_alert_recv_msg(struct tcpc_device *tcpc)
+```
+
+**목적**: PD 메시지 수신 처리
+
+**동작**:
+1. `pd_alloc_msg()` 호출하여 메시지 버퍼 할당
+2. `tcpci_get_message()` 호출하여 수신된 메시지 읽기
+   - 헤더, 페이로드, 메시지 타입(SOP/SOP'/SOP'') 추출
+3. 메시지를 PD 이벤트 큐에 추가
+4. RX Alert 상태 클리어
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 
+- 성공: 0
+- 실패: 음수 에러 코드 (-EINVAL 등)
+
+**호출 시점**: Alert 레지스터의 bit 2 (RX_STATUS) 설정 시
+
+**에러 처리**:
+- 메시지 할당 실패 시 -EINVAL 반환
+- 메시지 읽기 실패 시 할당된 버퍼 해제
+
+**연관 함수**:
+- → `pd_alloc_msg()` / `pd_free_msg()`
+- → `tcpci_get_message()`
+- → `pd_put_pd_msg_event()`
+
+---
+
+### 1.8 `tcpci_alert_rx_overflow()`
+
+```c
+static int tcpci_alert_rx_overflow(struct tcpc_device *tcpc)
+```
+
+**목적**: RX 버퍼 오버플로우 처리
+
+**동작**:
+- 오버플로우 로그 출력
+- `tcpci_alert_recv_msg()` 호출하여 메시지 읽기 시도
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: `tcpci_alert_recv_msg()`의 반환값
+
+**호출 시점**: Alert 레지스터의 bit 10 (RX_BUF_OVF) 설정 시
+
+**연관 함수**:
+- → `tcpci_alert_recv_msg()`
+
+---
+
+### 1.9 `tcpci_alert_recv_hard_reset()`
+
+```c
+static int tcpci_alert_recv_hard_reset(struct tcpc_device *tcpc)
+```
+
+**목적**: Hard Reset 수신 처리
+
+**동작**:
+1. Hard Reset 수신 로그 출력
+2. `pd_put_recv_hard_reset_event()` 호출하여 이벤트 발생
+3. `tcpci_init_alert_mask()` 호출하여 Alert Mask 재초기화
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: `tcpci_init_alert_mask()`의 반환값
+
+**호출 시점**: Alert 레지스터의 bit 3 (RX_HARD_RST) 설정 시
+
+**연관 함수**:
+- → `pd_put_recv_hard_reset_event()`
+- → `tcpci_init_alert_mask()`
+
+---
+
+### 1.10 `tcpci_alert_vendor_defined()`
+
+```c
+static int tcpci_alert_vendor_defined(struct tcpc_device *tcpc)
+```
+
+**목적**: 벤더 정의 Alert 처리
+
+**동작**:
+- 칩별 벤더 정의 핸들러 호출
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: `tcpci_alert_vendor_defined_handler()`의 반환값
+
+**호출 시점**: Alert 레지스터의 bit 15 (VENDOR_DEFINED) 설정 시
+
+**연관 함수**:
+- → `tcpci_alert_vendor_defined_handler()` (칩 드라이버)
+
+---
+
+### 1.11 `tcpci_alert_fault()`
+
+```c
+static int tcpci_alert_fault(struct tcpc_device *tcpc)
+```
+
+**목적**: Fault 상태 처리
+
+**동작**:
+1. `tcpci_get_fault_status()` 호출하여 Fault 상태 읽기
+2. Fault 상태 로그 출력
+3. `tcpci_fault_status_clear()` 호출하여 Fault 상태 클리어
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: Alert 레지스터의 bit 9 (FAULT) 설정 시
+
+**Fault 종류**:
+- VCONN Over Current
+- VBUS Over Voltage
+- VBUS Over Current
+- Force Discharge Failed
+
+**연관 함수**:
+- → `tcpci_get_fault_status()`
+- → `tcpci_fault_status_clear()`
+
+---
+
+### 1.12 `tcpci_alert_wakeup()`
+
+```c
+static int tcpci_alert_wakeup(struct tcpc_device *tcpc)
+```
+
+**목적**: 저전력 모드에서 깨어남 처리
+
+**동작**:
+1. `TCPC_FLAGS_LPM_WAKEUP_WATCHDOG` 플래그 확인
+2. DRP Toggling 상태인 경우 Wakeup 타이머 활성화
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: Alert 레지스터의 bit 16 (WAKEUP) 설정 시
+
+**조건부 컴파일**: `CONFIG_TYPEC_CAP_LPM_WAKEUP_WATCHDOG`
+
+**연관 함수**:
+- → `tcpc_enable_wakeup_timer()`
+
+---
+
+### 1.13 `tcpci_alert_ra_detach()`
+
+```c
+static int tcpci_alert_ra_detach(struct tcpc_device *tcpc)
+```
+
+**목적**: Ra (Audio Accessory) 분리 감지 처리
+
+**동작**:
+1. `TCPC_FLAGS_CHECK_RA_DETACH` 플래그 확인
+2. DRP Toggling 상태인 경우 저전력 모드 재진입
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: Alert 레지스터의 bit 21 (RA_DETACH) 설정 시
+
+**조건부 컴파일**: `CONFIG_TYPEC_CAP_RA_DETACH`
+
+**연관 함수**:
+- → `tcpc_typec_enter_lpm_again()`
+
+---
+
+## 2. VBUS 레벨 관리
+
+### 2.1 `tcpci_vbus_level_init_v10()`
+
+```c
+static inline void tcpci_vbus_level_init_v10(
+    struct tcpc_device *tcpc, uint16_t power_status)
+```
+
+**목적**: TCPCI v1.0 호환 모드에서 VBUS 레벨 초기화
+
+**동작**:
+1. Power Status 레지스터 값 기반으로 VBUS 레벨 결정:
+   - `VBUS_PRES` 비트 설정: `TCPC_VBUS_VALID`
+   - `EXT_VSAFE0V` 비트 설정: `TCPC_VBUS_SAFE0V`
+   - 둘 다 없음: `TCPC_VBUS_INVALID`
+2. Mutex로 보호하여 동시성 보장
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+- `power_status`: Power Status 레지스터 값
+
+**VBUS 레벨**:
+- `TCPC_VBUS_INVALID`: VBUS 없음
+- `TCPC_VBUS_SAFE0V`: 안전한 0V
+- `TCPC_VBUS_VALID`: 유효한 VBUS (5V 이상)
+
+---
+
+### 2.2 `__tcpci_vbus_level_refresh()`
+
+```c
+static void __tcpci_vbus_level_refresh(struct tcpc_device *tcpc)
+```
+
+**목적**: VBUS 레벨 내부 갱신 (Mutex 없음)
+
+**동작**:
+1. `vbus_present` 플래그 기반으로 레벨 결정
+2. `vbus_safe0v` 플래그 확인하여 Safe0V 상태 반영
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**주의**: Mutex 없이 호출되므로 호출자가 동기화 보장 필요
+
+---
+
+### 2.3 `tcpci_vbus_level_refresh()`
+
+```c
+static inline void tcpci_vbus_level_refresh(struct tcpc_device *tcpc)
+```
+
+**목적**: VBUS 레벨 갱신 (Mutex 보호)
+
+**동작**:
+- Mutex 획득 후 `__tcpci_vbus_level_refresh()` 호출
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+---
+
+### 2.4 `tcpci_vbus_level_init()`
+
+```c
+void tcpci_vbus_level_init(struct tcpc_device *tcpc, uint16_t power_status)
+```
+
+**목적**: VBUS 레벨 초기화 (공개 함수)
+
+**동작**:
+1. TCPCI v1.0 모드 확인:
+   - v1.0: `tcpci_vbus_level_init_v10()` 호출
+   - 그 외: `vbus_present` 설정 후 레벨 갱신
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+- `power_status`: Power Status 레지스터 값
+
+**호출 시점**: TCPC 초기화 시
+
+---
+
+### 2.5 `tcpci_vbus_level_changed()`
+
+```c
+static int tcpci_vbus_level_changed(struct tcpc_device *tcpc)
+```
+
+**목적**: VBUS 레벨 변경 처리
+
+**동작**:
+1. `tcpc_typec_handle_ps_change()` 호출하여 Type-C 상태 업데이트
+2. PD 활성화 시:
+   - `CONFIG_USB_PD_SAFE5V_DELAY` 설정: 타이머 시작
+   - 그렇지 않으면: 즉시 VBUS 변경 이벤트 발생
+3. Safe0V 상태인 경우 `tcpci_alert_vsafe0v()` 호출
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 
+- 성공: 0
+- 실패: 음수 에러 코드
+
+**연관 함수**:
+- → `tcpc_typec_handle_ps_change()`
+- → `pd_put_vbus_changed_event()`
+- → `tcpci_alert_vsafe0v()`
+
+---
+
+## 3. 메인 Alert 처리 함수
+
+### 3.1 `tcpci_check_hard_reset_complete()`
+
+```c
+static inline bool tcpci_check_hard_reset_complete(
+    struct tcpc_device *tcpc, uint32_t alert_status)
+```
+
+**목적**: Hard Reset 전송 완료 확인
+
+**동작**:
+1. TX_SUCCESS와 TX_FAILED 비트 모두 설정 확인
+   - 설정됨: Hard Reset 성공, 이벤트 발생
+2. TX_DISCARDED 비트 설정 확인
+   - 설정됨: Hard Reset 실패, 재전송
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+- `alert_status`: Alert 상태 레지스터 값
+
+**반환값**:
+- `true`: Hard Reset 완료
+- `false`: 아직 진행 중
+
+**조건부 컴파일**: `CONFIG_USB_POWER_DELIVERY`
+
+**연관 함수**:
+- → `pd_put_sent_hard_reset_event()`
+- → `tcpci_transmit()`
+
+---
+
+### 3.2 `tcpci_alert()` ⭐ 핵심 함수
+
+```c
+int tcpci_alert(struct tcpc_device *tcpc)
+```
+
+**목적**: TCPC Alert 메인 처리 함수 (IRQ 핸들러에서 호출)
+
+**동작 순서**:
+1. **Alert 상태 읽기**:
+   - `tcpci_get_alert_status()`: Alert 레지스터 읽기
+   - `tcpci_get_alert_mask()`: Alert Mask 읽기
+   - Mask된 Alert만 처리
+
+2. **유효성 검사**:
+   - Type-C Role이 유효한지 확인
+   - 유효하지 않으면 Alert 클리어 후 종료
+
+3. **Alert 마스킹**:
+   - 모든 Alert 임시 비활성화 (처리 중 중복 방지)
+   - RX Alert 제외하고 상태 클리어
+
+4. **특수 처리**:
+   - TCPCI v1.0: VBUS 80% Alert을 Power Status Alert로 변환
+   - Hard Reset 대기 중: Hard Reset 완료 확인
+
+5. **핸들러 실행**:
+   - `tcpci_alert_handlers` 배열 순회
+   - 설정된 비트에 해당하는 핸들러 호출
+
+6. **Alert 복원**:
+   - Alert Mask 재활성화
+
+7. **VBUS 레벨 갱신** (v1.0 아닌 경우):
+   - `tcpci_vbus_level_refresh()`
+   - `tcpci_vbus_level_changed()`
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 
+- 성공: 0
+- 실패: 음수 에러 코드
+
+**호출 시점**: TCPC 칩 IRQ 발생 시
+
+**핸들러 우선순위** (배열 순서):
+1. Vendor Defined (bit 15)
+2. PD 관련 (TX/RX)
+3. Wakeup (bit 16)
+4. RA Detach (bit 21)
+5. Fault (bit 9)
+6. CC Changed (bit 0)
+7. Power Status Changed (bit 1)
+
+**연관 함수**:
+- → 모든 `tcpci_alert_*()` 핸들러 함수들
+
+---
+
+## 4. USB 포트 상태 보고
+
+### 4.1 `tcpci_report_usb_port_attached()`
+
+```c
+static inline int tcpci_report_usb_port_attached(struct tcpc_device *tcpc)
+```
+
+**목적**: USB 포트 연결 보고
+
+**동작**:
+1. Wake Lock 획득 (`tcpci_set_wake_lock_pd(true)`)
+2. PD 활성화 및 PE 비활성화 아닌 경우:
+   - `pd_put_cc_attached_event()` 호출하여 PD 이벤트 발생
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: Type-C 연결 감지 시
+
+**연관 함수**:
+- → `tcpci_set_wake_lock_pd()`
+- → `pd_put_cc_attached_event()`
+
+---
+
+### 4.2 `tcpci_report_usb_port_detached()`
+
+```c
+static inline int tcpci_report_usb_port_detached(struct tcpc_device *tcpc)
+```
+
+**목적**: USB 포트 분리 보고
+
+**동작**:
+1. PD 초기화 완료 확인:
+   - 완료: `pd_put_cc_detached_event()` 호출
+   - 미완료: 이벤트 버퍼 리셋 및 PE Idle 타이머 시작
+2. Wake Lock 해제 (`tcpci_set_wake_lock_pd(false)`)
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: Type-C 연결 해제 시
+
+**연관 함수**:
+- → `pd_put_cc_detached_event()`
+- → `pd_event_buf_reset()`
+- → `tcpci_set_wake_lock_pd()`
+
+---
+
+### 4.3 `tcpci_report_usb_port_changed()`
+
+```c
+int tcpci_report_usb_port_changed(struct tcpc_device *tcpc)
+```
+
+**목적**: USB 포트 상태 변경 보고 (공개 함수)
+
+**동작**:
+1. `tcpci_notify_typec_state()` 호출하여 Type-C 상태 알림
+2. 이전/현재 연결 상태 비교:
+   - Unattached → Attached: `tcpci_report_usb_port_attached()` 호출
+   - Attached → Unattached: `tcpci_report_usb_port_detached()` 호출
+   - Attached → Attached: 재연결 로그 출력
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: Type-C 연결 상태 변경 시
+
+**연관 함수**:
+- → `tcpci_notify_typec_state()`
+- → `tcpci_report_usb_port_attached()`
+- → `tcpci_report_usb_port_detached()`
+
+---
+
+## 5. Wake Lock 관리
+
+### 5.1 `tcpci_set_wake_lock()`
+
+```c
+static inline int tcpci_set_wake_lock(struct tcpc_device *tcpc, bool pd_lock)
+```
+
+**목적**: Wake Lock 상태 설정 (내부 함수)
+
+**동작**:
+1. 현재 Wake Lock 상태와 요청 상태 비교
+2. 상태 변경 필요 시:
+   - Lock 획득: `__pm_wakeup_event()` 호출, Watchdog 활성화
+   - Lock 해제: Watchdog 비활성화, `__pm_relax()` 호출
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+- `pd_lock`: Wake Lock 활성화 여부
+
+**반환값**:
+- 1: 상태 변경됨
+- 0: 상태 변경 없음
+
+**Wake Lock 타임아웃**: `CONFIG_TCPC_ATTACH_WAKE_LOCK_TOUT`
+
+**연관 함수**:
+- → `__pm_wakeup_event()` / `__pm_relax()`
+- → `tcpci_set_intrst()`
+
+---
+
+### 5.2 `tcpci_set_wake_lock_pd()`
+
+```c
+static int tcpci_set_wake_lock_pd(struct tcpc_device *tcpc, bool pd_lock)
+```
+
+**목적**: PD Wake Lock 참조 카운트 관리
+
+**동작**:
+1. Mutex 획득
+2. Wake Lock 참조 카운트 업데이트:
+   - `pd_lock == true`: 카운트 증가
+   - `pd_lock == false`: 카운트 감소
+3. 카운트가 0이 되면: Detach Wake Lock 활성화 (5초)
+4. `tcpci_set_wake_lock()` 호출하여 실제 Wake Lock 설정
+5. 카운트가 1이 되면: Detach Wake Lock 해제
+6. Mutex 해제
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+- `pd_lock`: Wake Lock 활성화 여부
+
+**반환값**: 0 (성공)
+
+**참조 카운트 방식**:
+- 여러 컴포넌트가 동시에 Wake Lock 요청 가능
+- 모든 요청이 해제되어야 실제 Wake Lock 해제
+
+**연관 함수**:
+- → `tcpci_set_wake_lock()`
+- → `__pm_wakeup_event()` / `__pm_relax()`
+
+---
+
+## 6. 전원 제어 보고
+
+### 6.1 `tcpci_report_power_control_on()`
+
+```c
+static inline int tcpci_report_power_control_on(struct tcpc_device *tcpc)
+```
+
+**목적**: 전원 제어 활성화 보고
+
+**동작**:
+1. Wake Lock 획득
+2. Discharge 타이머 비활성화
+3. Auto Discharge 활성화
+4. Force Discharge 비활성화
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: VBUS 공급 시작 시
+
+**연관 함수**:
+- → `tcpci_set_wake_lock_pd()`
+- → `tcpc_disable_timer()`
+- → `tcpci_enable_auto_discharge()`
+- → `tcpci_enable_force_discharge()`
+
+---
+
+### 6.2 `tcpci_report_power_control_off()`
+
+```c
+static inline int tcpci_report_power_control_off(struct tcpc_device *tcpc)
+```
+
+**목적**: 전원 제어 비활성화 보고
+
+**동작**:
+1. Force Discharge 활성화 (VBUS 빠른 방전)
+2. Discharge 타이머 시작
+3. Wake Lock 해제
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+
+**반환값**: 0 (성공)
+
+**호출 시점**: VBUS 공급 중단 시
+
+**연관 함수**:
+- → `tcpci_enable_force_discharge()`
+- → `tcpc_enable_timer()`
+- → `tcpci_set_wake_lock_pd()`
+
+---
+
+### 6.3 `tcpci_report_power_control()`
+
+```c
+int tcpci_report_power_control(struct tcpc_device *tcpc, bool en)
+```
+
+**목적**: 전원 제어 상태 변경 보고 (공개 함수)
+
+**동작**:
+1. 현재 전원 제어 상태와 요청 상태 비교
+2. 상태 변경 필요 시:
+   - 활성화: `tcpci_report_power_control_on()` 호출
+   - 비활성화: `tcpci_report_power_control_off()` 호출
+3. 내부 상태 업데이트
+
+**파라미터**:
+- `tcpc`: TCPC 디바이스 구조체 포인터
+- `en`: 전원 제어 활성화 여부
+
+**반환값**: 0 (성공)
+
+**호출 시점**: VBUS 제어 상태 변경 시
+
+**연관 함수**:
+- → `tcpci_report_power_control_on()`
+- → `tcpci_report_power_control_off()`
+
+---
+
+## 7. Alert 핸들러 테이블
+
+### 7.1 `tcpci_alert_handler` 구조체
+
+```c
+struct tcpci_alert_handler {
+    uint32_t bit_mask;
+    int (*handler)(struct tcpc_device *tcpc);
+};
+```
+
+**목적**: Alert 비트와 핸들러 함수 매핑
+
+**멤버**:
+- `bit_mask`: Alert 레지스터 비트 마스크
+- `handler`: 핸들러 함수 포인터 (NULL 가능)
+
+---
+
+### 7.2 `tcpci_alert_handlers` 배열
+
+```c
+static const struct tcpci_alert_handler tcpci_alert_handlers[]
+```
+
+**Alert 비트 매핑**:
+
+| Bit | 핸들러 함수 | 설명 |
+|-----|-------------|------|
+| 0 | `tcpci_alert_cc_changed` | CC 상태 변경 |
+| 1 | `tcpci_alert_power_status_changed` | 전원 상태 변경 |
+| 2 | `tcpci_alert_recv_msg` | PD 메시지 수신 |
+| 3 | `tcpci_alert_recv_hard_reset` | Hard Reset 수신 |
+| 4 | `tcpci_alert_tx_failed` | 전송 실패 |
+| 5 | `tcpci_alert_tx_discard` | 전송 폐기 |
+| 6 | `tcpci_alert_tx_success` | 전송 성공 |
+| 7 | NULL | Reserved |
+| 8 | NULL | Reserved |
+| 9 | `tcpci_alert_fault` | Fault 발생 |
+| 10 | `tcpci_alert_rx_overflow` | RX 오버플로우 |
+| 15 | `tcpci_alert_vendor_defined` | 벤더 정의 |
+| 16 | `tcpci_alert_wakeup` | Wakeup (조건부) |
+| 21 | `tcpci_alert_ra_detach` | Ra 분리 (조건부) |
+
+---
+
+## 8. 함수 호출 관계도
+
+```
+IRQ Handler (칩 드라이버)
+    ↓
+tcpci_alert() ⭐ 메인 함수
+    ├─→ tcpci_get_alert_status()
+    ├─→ tcpci_get_alert_mask()
+    ├─→ tcpci_check_hard_reset_complete()
+    │       └─→ pd_put_sent_hard_reset_event()
+    ├─→ tcpci_alert_cc_changed()
+    │       └─→ tcpc_typec_handle_cc_change()
+    ├─→ tcpci_alert_power_status_changed()
+    │       ├─→ tcpci_get_power_status()
+    │       └─→ tcpci_vbus_level_changed()
+    │               ├─→ tcpc_typec_handle_ps_change()
+    │               ├─→ pd_put_vbus_changed_event()
+    │               └─→ tcpci_alert_vsafe0v()
+    ├─→ tcpci_alert_tx_success()
+    │       └─→ pd_put_vdm_event() / pd_put_event()
+    ├─→ tcpci_alert_tx_failed()
+    │       └─→ vdm_put_hw_event() / pd_put_hw_event()
+    ├─→ tcpci_alert_tx_discard()
+    │       └─→ vdm_put_hw_event() / pd_put_hw_event()
+    ├─→ tcpci_alert_recv_msg()
+    │       ├─→ pd_alloc_msg()
+    │       ├─→ tcpci_get_message()
+    │       └─→ pd_put_pd_msg_event()
+    ├─→ tcpci_alert_recv_hard_reset()
+    │       ├─→ pd_put_recv_hard_reset_event()
+    │       └─→ tcpci_init_alert_mask()
+    ├─→ tcpci_alert_fault()
+    │       ├─→ tcpci_get_fault_status()
+    │       └─→ tcpci_fault_status_clear()
+    └─→ tcpci_vbus_level_refresh()
+            └─→ __tcpci_vbus_level_refresh()
+```
+
+---
+
+## 9. 주요 사용 시나리오
+
+### 시나리오 1: Type-C 연결 감지
+
+1. USB-C 케이블 연결
+2. TCPC 칩 IRQ 발생
+3. `tcpci_alert()` 호출
+4. `tcpci_alert_cc_changed()` 실행
+5. `tcpc_typec_handle_cc_change()` 호출
+6. Type-C 상태 머신 업데이트
+7. `tcpci_report_usb_port_changed()` 호출
+8. `tcpci_report_usb_port_attached()` 실행
+9. Wake Lock 획득
+10. PD 협상 시작
+
+### 시나리오 2: PD 메시지 수신
+
+1. Source Capabilities 메시지 수신
+2. TCPC 칩 RX Alert 발생
+3. `tcpci_alert()` 호출
+4. `tcpci_alert_recv_msg()` 실행
+5. `pd_alloc_msg()` 메시지 버퍼 할당
+6. `tcpci_get_message()` 메시지 읽기
+7. `pd_put_pd_msg_event()` 이벤트 큐에 추가
+8. Policy Engine에서 메시지 처리
+
+### 시나리오 3: VBUS 변경
+
+1. VBUS 5V 공급
+2. Power Status Alert 발생
+3. `tcpci_alert()` 호출
+4. `tcpci_alert_power_status_changed()` 실행
+5. `tcpci_vbus_level_changed()` 호출
+6. `tcpc_typec_handle_ps_change()` 상태 업데이트
+7. `pd_put_vbus_changed_event()` 이벤트 발생
+8. Policy Engine에서 VBUS 변경 처리
+
+---
+
+## 10. 요약
+
+`tcpci_alert.c`는 TCPC 인터럽트 처리의 핵심 파일로, 다음 기능을 제공합니다:
+
+**주요 기능**:
+1. **인터럽트 처리**: 17가지 Alert 타입 처리
+2. **VBUS 관리**: VBUS 레벨 감지 및 상태 관리
+3. **PD 메시지**: 송수신 성공/실패 처리
+4. **전원 관리**: Wake Lock 및 Discharge 제어
+5. **상태 보고**: USB 포트 연결/해제 알림
+
+**핵심 함수**: `tcpci_alert()` - 모든 Alert의 진입점
+
+**설계 특징**:
+- 핸들러 테이블 기반 확장 가능한 구조
+- Mutex를 통한 동시성 제어
+- 조건부 컴파일로 기능 선택 가능
+- TCPCI v1.0 호환성 지원

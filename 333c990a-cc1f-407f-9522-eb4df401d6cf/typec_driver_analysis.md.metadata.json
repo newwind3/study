@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_OTHER",
+  "summary": "MT83xx TypeC 드라이버의 전체 아키텍처 분석 문서. TCPC와 MUX 서브시스템의 구조, 81개 파일의 역할과 연계성, 초기화/연결/Alt Mode 플로우, 주요 데이터 구조, 빌드 구성을 포함. Mermaid 다이어그램으로 아키텍처와 시퀀스 플로우를 시각화",
+  "updatedAt": "2026-02-09T06:03:56.836062322Z"
+}

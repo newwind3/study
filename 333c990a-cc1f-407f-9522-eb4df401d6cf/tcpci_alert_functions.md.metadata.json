@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_OTHER",
+  "summary": "tcpci_alert.c 파일의 모든 함수에 대한 상세 설명 문서. 각 함수의 목적, 파라미터, 동작 방식, 반환값, 호출 관계를 상세히 설명. TCPC 인터럽트 처리, VBUS 레벨 관리, PD 메시지 송수신, Wake Lock 관리 등의 기능별로 분류하여 정리",
+  "updatedAt": "2026-02-09T06:40:59.052142948Z"
+}
