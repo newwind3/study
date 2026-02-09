@@ -1,0 +1,12 @@
+# TCPCI TypeC 코드 분석 및 플로우 차트 생성
+
+## 작업 목표
+[tcpci_typec.c](file:///home/jayden/src/mtk/sp4000t/MT83xx_T/kernel-5.15/drivers/misc/mediatek/typec/tcpc/tcpci_typec.c) 파일의 코드를 분석하여 전체 동작 흐름을 이해하고 플로우 차트를 생성합니다.
+
+## 작업 체크리스트
+
+- [x] 파일 구조 및 주요 함수 파악
+- [x] 상태 전환 로직 분석
+- [x] 이벤트 핸들러 분석
+- [x] 플로우 차트 생성
+- [x] 분석 결과 문서화

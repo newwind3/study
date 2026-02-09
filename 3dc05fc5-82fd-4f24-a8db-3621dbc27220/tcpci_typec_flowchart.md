@@ -1,0 +1,460 @@
+# TCPCI TypeC 코드 플로우 차트 및 분석
+
+## 개요
+
+`tcpci_typec.c` 파일은 **USB Type-C 포트 컨트롤러(TCPC)**의 상태 머신을 구현하는 커널 드라이버입니다. 이 드라이버는 CC(Configuration Channel) 핀의 변화, 타임아웃 이벤트, VBUS 전원 상태 변화 등을 처리하여 Type-C 연결을 관리합니다.
+
+---
+
+## 주요 구성 요소
+
+### 1. 상태(States)
+
+Type-C 포트는 다음과 같은 주요 상태들을 가집니다:
+
+| 상태 | 설명 |
+|------|------|
+| `typec_disabled` | Type-C 기능이 비활성화된 상태 |
+| `typec_errorrecovery` | 에러 복구 상태 |
+| `typec_unattached_snk` | 연결되지 않은 Sink 상태 |
+| `typec_unattached_src` | 연결되지 않은 Source 상태 |
+| `typec_attachwait_snk` | Sink 연결 대기 상태 (디바운싱) |
+| `typec_attachwait_src` | Source 연결 대기 상태 (디바운싱) |
+| `typec_attached_snk` | Sink로 연결된 상태 |
+| `typec_attached_src` | Source로 연결된 상태 |
+| `typec_try_src` | Try.SRC 상태 (DRP 모드) |
+| `typec_trywait_snk` | TryWait.SNK 상태 |
+| `typec_audioaccessory` | 오디오 액세서리 모드 |
+| `typec_debugaccessory` | 디버그 액세서리 모드 |
+
+### 2. 이벤트 핸들러
+
+세 가지 주요 이벤트 핸들러가 있습니다:
+
+#### `tcpc_typec_handle_cc_change()`
+- **트리거**: CC 핀 상태 변화 감지
+- **동작**: CC 핀의 저항값을 읽어 연결/분리 상태 판단
+- **결과**: Attach Wait 또는 Detach Wait 상태로 전환
+
+#### `tcpc_typec_handle_timeout()`
+- **트리거**: 타이머 만료
+- **처리 타임아웃**:
+  - Debounce 타임아웃 (CC 안정화)
+  - DRP toggle 타임아웃
+  - Error recovery 타임아웃
+  - Low power mode 타임아웃
+  - Legacy cable 감지 타임아웃
+
+#### `tcpc_typec_handle_ps_change()`
+- **트리거**: VBUS 전원 상태 변화
+- **동작**: VBUS 존재/부재 감지
+- **결과**: 연결 완료 또는 분리 처리
+
+---
+
+## 전체 플로우 차트
+
+```mermaid
+flowchart TD
+    Start([시작]) --> Init[tcpc_typec_init<br/>초기화]
+    Init --> MainLoop{이벤트 대기}
+    
+    MainLoop -->|CC 변화| CCHandler[tcpc_typec_handle_cc_change]
+    MainLoop -->|타임아웃| TimeoutHandler[tcpc_typec_handle_timeout]
+    MainLoop -->|전원 변화| PSHandler[tcpc_typec_handle_ps_change]
+    
+    %% CC Change Handler Flow
+    CCHandler --> GetCC[CC 핀 상태 읽기<br/>tcpci_get_cc]
+    GetCC --> CheckNoRes{CC No Res?<br/>typec_is_cc_no_res}
+    CheckNoRes -->|Yes| LPM[저전력 모드 진입<br/>typec_enter_low_power_mode]
+    CheckNoRes -->|No| CheckAttach{CC Attach?<br/>typec_is_cc_attach}
+    
+    CheckAttach -->|Yes| DisableLPM[저전력 모드 해제]
+    DisableLPM --> AttachWait[typec_attach_wait_entry<br/>연결 대기 상태]
+    AttachWait --> StartDebounce[디바운스 타이머 시작]
+    
+    CheckAttach -->|No| DetachWait[typec_detach_wait_entry<br/>분리 대기 상태]
+    
+    %% Timeout Handler Flow
+    TimeoutHandler --> CheckTimer{타이머 종류}
+    CheckTimer -->|Debounce| HandleDebounce[typec_handle_debounce_timeout]
+    CheckTimer -->|DRP Toggle| HandleToggle[typec_handle_src_toggle_timeout]
+    CheckTimer -->|Error Recovery| HandleError[typec_handle_error_recovery_timeout]
+    CheckTimer -->|Low Power| TryLPM[typec_try_low_power_mode]
+    
+    HandleDebounce --> CheckState{현재 상태}
+    CheckState -->|AttachWait.SNK| AttachedSNK[typec_sink_attached_entry<br/>Attached.SNK]
+    CheckState -->|AttachWait.SRC| AttachedSRC[typec_source_attached_entry<br/>Attached.SRC]
+    CheckState -->|DetachWait| Unattached[typec_unattached_entry<br/>Unattached]
+    
+    %% Power State Handler Flow
+    PSHandler --> CheckVBUS{VBUS 상태}
+    CheckVBUS -->|Present| VBUSPresent[typec_handle_vbus_present]
+    CheckVBUS -->|Absent| VBUSAbsent[typec_handle_vbus_absent]
+    
+    VBUSPresent --> CheckWaitSNK{AttachWait.SNK?}
+    CheckWaitSNK -->|Yes| AttachedSNK
+    
+    VBUSAbsent --> CheckAttachedSNK{Attached.SNK?}
+    CheckAttachedSNK -->|Yes| SNKDetach[typec_attached_snk_vbus_absent<br/>SNK 분리 처리]
+    
+    %% State Transitions
+    AttachedSNK --> ConfigSNK[Sink 설정<br/>- Polarity 설정<br/>- VBUS Sink 활성화<br/>- Power Control 보고]
+    AttachedSRC --> ConfigSRC[Source 설정<br/>- Polarity 설정<br/>- VCONN 활성화<br/>- VBUS Source 활성화]
+    
+    SNKDetach --> Unattached
+    Unattached --> UnattachedCC[typec_unattached_cc_entry<br/>CC 설정]
+    
+    UnattachedCC --> CheckRole{역할 확인}
+    CheckRole -->|SNK| UnattachedSNK[Unattached.SNK<br/>Rd 설정]
+    CheckRole -->|SRC| UnattachedSRC[Unattached.SRC<br/>Rp 설정]
+    CheckRole -->|DRP| DRPToggle[DRP Toggling<br/>Rp/Rd 교대]
+    
+    %% Return to main loop
+    LPM --> MainLoop
+    StartDebounce --> MainLoop
+    DetachWait --> MainLoop
+    ConfigSNK --> MainLoop
+    ConfigSRC --> MainLoop
+    UnattachedSNK --> MainLoop
+    UnattachedSRC --> MainLoop
+    DRPToggle --> MainLoop
+    TryLPM --> MainLoop
+    
+    style Start fill:#90EE90
+    style Init fill:#90EE90
+    style CCHandler fill:#FFA500
+    style TimeoutHandler fill:#FFA500
+    style PSHandler fill:#FFA500
+    style AttachedSNK fill:#87CEEB
+    style AttachedSRC fill:#87CEEB
+    style UnattachedSNK fill:#87CEEB
+    style UnattachedSRC fill:#87CEEB
+    style CheckNoRes fill:#FFD700
+    style CheckAttach fill:#FFD700
+    style CheckTimer fill:#FFD700
+    style CheckVBUS fill:#FFD700
+    style CheckState fill:#FFD700
+    style CheckRole fill:#FFD700
+```
+
+---
+
+## 상세 동작 흐름
+
+### 1. CC 변화 이벤트 처리
+
+```mermaid
+flowchart TD
+    A[CC 변화 인터럽트] --> B[tcpc_typec_handle_cc_change]
+    B --> C[CC 핀 상태 읽기<br/>typec_get_cc1/cc2]
+    C --> D{CC 상태 확인}
+    
+    D -->|Both Open| E[CC No Res<br/>저전력 모드]
+    D -->|Rd 감지| F[Sink 연결 감지]
+    D -->|Rp 감지| G[Source 연결 감지]
+    D -->|Ra 감지| H[Audio/Debug Accessory]
+    
+    F --> I[typec_attach_wait_entry]
+    G --> I
+    H --> J[typec_audio_acc_attached_entry]
+    
+    I --> K[AttachWait 상태 전환]
+    K --> L[디바운스 타이머 시작<br/>TYPEC_TIMER_CCDEBOUNCE]
+    
+    L --> M{타이머 만료}
+    M --> N[typec_handle_debounce_timeout]
+    N --> O{최종 상태 확인}
+    
+    O -->|Rd 안정| P[typec_sink_attached_entry<br/>Attached.SNK]
+    O -->|Rp 안정| Q[typec_source_attached_entry<br/>Attached.SRC]
+    O -->|Open| R[typec_unattached_entry]
+    
+    P --> S[VBUS Sink 활성화<br/>tcpci_sink_vbus]
+    Q --> T[VBUS Source 활성화<br/>tcpci_source_vbus]
+```
+
+### 2. 전원 상태 변화 처리
+
+```mermaid
+flowchart TD
+    A[VBUS 변화 감지] --> B[tcpc_typec_handle_ps_change]
+    B --> C{VBUS 레벨}
+    
+    C -->|>= VALID| D[typec_handle_vbus_present]
+    C -->|< VALID| E[typec_handle_vbus_absent]
+    
+    D --> F{현재 상태}
+    F -->|AttachWait.SNK| G[VBUS 확인됨<br/>연결 완료 조건 충족]
+    F -->|TryWait.SNK| H[Try.SNK에서 전환]
+    
+    G --> I[typec_sink_attached_entry]
+    H --> I
+    
+    E --> J{현재 상태}
+    J -->|Attached.SNK| K[typec_attached_snk_vbus_absent]
+    J -->|Attached.SRC| L[정상 동작<br/>Source는 VBUS 제공]
+    
+    K --> M[VBUS 사라짐<br/>분리 감지]
+    M --> N[typec_cc_snk_remove_entry]
+    N --> O[Unattached 상태로 전환]
+```
+
+### 3. 타임아웃 이벤트 처리
+
+```mermaid
+flowchart TD
+    A[타이머 만료] --> B[tcpc_typec_handle_timeout]
+    B --> C{타이머 ID}
+    
+    C -->|CCDEBOUNCE| D[CC 디바운스 완료]
+    C -->|PDDEBOUNCE| E[PD 디바운스 완료]
+    C -->|DRP_SRC_TOGGLE| F[DRP 토글 타임아웃]
+    C -->|ERROR_RECOVERY| G[에러 복구 타임아웃]
+    C -->|LOW_POWER_MODE| H[저전력 모드 재시도]
+    
+    D --> I[typec_handle_debounce_timeout]
+    I --> J{현재 상태}
+    
+    J -->|AttachWait.SNK| K{VBUS 확인}
+    K -->|Present| L[Attached.SNK 전환]
+    K -->|Absent| M[계속 대기]
+    
+    J -->|AttachWait.SRC| N{Rd 확인}
+    N -->|Present| O[Attached.SRC 전환]
+    N -->|Absent| P[Unattached 전환]
+    
+    F --> Q[typec_handle_src_toggle_timeout]
+    Q --> R[Source에서 Sink로 전환<br/>DRP 동작]
+    
+    G --> S[typec_handle_error_recovery_timeout]
+    S --> T[Unattached 상태로 복귀]
+    
+    H --> U[typec_try_low_power_mode]
+    U --> V[저전력 모드 재진입 시도]
+```
+
+---
+
+## 주요 함수 설명
+
+### 초기화 및 상태 전환
+
+#### `tcpc_typec_init()`
+- Type-C 상태 머신 초기화
+- 역할(SNK/SRC/DRP) 설정
+- 초기 상태로 전환
+
+#### `typec_transfer_state()`
+- 상태 전환 수행
+- 상태 이름 로깅
+- `tcpc->typec_state` 업데이트
+
+### Unattached 상태 진입
+
+#### `typec_unattached_entry()`
+- 연결 해제 시 호출
+- VCONN 비활성화
+- CC 설정 및 전원 제어
+
+#### `typec_unattached_cc_entry()`
+- 역할에 따라 CC 핀 설정
+  - **SNK**: Rd 설정
+  - **SRC**: Rp 설정
+  - **DRP**: DRP 토글링 시작
+
+### Attached 상태 진입
+
+#### `typec_sink_attached_entry()`
+- Sink로 연결 완료
+- Polarity 설정 (`typec_set_plug_orient`)
+- Remote Rp level 저장
+- VBUS Sink 활성화
+
+#### `typec_source_attached_entry()`
+- Source로 연결 완료
+- Polarity 설정
+- VCONN 활성화 (`typec_enable_vconn`)
+- VBUS Source 활성화 (5V)
+
+### 연결/분리 감지
+
+#### `typec_is_cc_attach()`
+- CC 핀 상태를 분석하여 연결 여부 판단
+- Rd, Rp, Ra 저항값 확인
+- Audio/Debug Accessory 감지
+
+#### `typec_attach_wait_entry()`
+- 연결 대기 상태로 전환
+- 디바운스 타이머 시작
+- Try.SRC/Try.SNK 로직 처리
+
+#### `typec_detach_wait_entry()`
+- 분리 대기 상태로 전환
+- 디바운스 타이머 시작
+- 안정화 후 Unattached로 전환
+
+### 전원 제어
+
+#### `typec_handle_vbus_present()`
+- VBUS 전원 감지 시 처리
+- AttachWait.SNK → Attached.SNK 전환 조건
+
+#### `typec_handle_vbus_absent()`
+- VBUS 전원 소실 시 처리
+- Attached.SNK에서 분리 처리
+
+#### `typec_attached_snk_vbus_absent()`
+- Sink 상태에서 VBUS 소실
+- 분리 절차 시작
+
+---
+
+## 특수 기능
+
+### 1. DRP (Dual Role Port) 동작
+
+```mermaid
+flowchart LR
+    A[Unattached.SRC<br/>Rp 제공] -->|DRP_SRC_TOGGLE<br/>타임아웃| B[Unattached.SNK<br/>Rd 제공]
+    B -->|연결 없음| A
+    A -->|Rd 감지| C[Attached.SRC]
+    B -->|Rp 감지 + VBUS| D[Attached.SNK]
+```
+
+### 2. Try.SRC / Try.SNK
+
+- **Try.SRC**: DRP 포트가 Source를 우선 시도
+- **Try.SNK**: DRP 포트가 Sink를 우선 시도
+- TryWait 상태에서 최종 역할 결정
+
+### 3. Legacy Cable 감지
+
+- `CONFIG_TYPEC_CHECK_LEGACY_CABLE` 활성화 시
+- 비표준 케이블 감지 및 처리
+- 특수 타이밍 및 재시도 로직
+
+### 4. Water Detection
+
+- `CONFIG_WATER_DETECTION` 활성화 시
+- CC 핀의 수분 감지
+- 보호 모드 진입
+
+### 5. Audio/Debug Accessory
+
+- **Audio Accessory**: 양쪽 CC 핀 모두 Ra
+- **Debug Accessory**: CC 핀에 특수 저항 조합
+- 별도의 상태 및 처리 로직
+
+---
+
+## 타이머 종류
+
+| 타이머 | 용도 | 시간 |
+|--------|------|------|
+| `TYPEC_TIMER_CCDEBOUNCE` | CC 디바운싱 | 100-200ms |
+| `TYPEC_TIMER_PDDEBOUNCE` | PD 디바운싱 | 10-20ms |
+| `TYPEC_TIMER_ERROR_RECOVERY` | 에러 복구 | 25ms |
+| `TYPEC_TIMER_DRP_SRC_TOGGLE` | DRP Source 토글 | 50-100ms |
+| `TYPEC_RT_TIMER_LOW_POWER_MODE` | 저전력 모드 진입 | 가변 |
+| `TYPEC_RT_TIMER_SAFE0V_DELAY` | VSafe0V 지연 | 가변 |
+
+---
+
+## 코드 구조 요약
+
+```
+tcpci_typec.c (3057 lines, 169 functions)
+├── [BLOCK] 상태 정의 (139-278)
+│   └── TYPEC_CONNECTION_STATE enum
+├── [BLOCK] 이벤트 핸들러 (311-366)
+│   ├── typec_alert_attach_state_change()
+│   └── typec_check_water_status()
+├── [BLOCK] Unattached Entry (440-684)
+│   ├── typec_unattached_entry()
+│   ├── typec_unattached_cc_entry()
+│   └── typec_error_recovery_entry()
+├── [BLOCK] Attached Entry (690-834)
+│   ├── typec_source_attached_entry()
+│   ├── typec_sink_attached_entry()
+│   └── typec_custom_src_attached_entry()
+├── [BLOCK] Try.SRC / TryWait.SNK (844-893)
+│   ├── typec_try_src_entry()
+│   └── typec_trywait_snk_entry()
+├── [BLOCK] Attach / Detach (942-1036)
+│   ├── typec_attach_wait_entry()
+│   └── typec_detach_wait_entry()
+├── [BLOCK] Legacy Cable (1044-1350)
+│   └── typec_legacy_check_cable()
+├── [BLOCK] CC Change (1357-1570)
+│   ├── typec_handle_cc_changed_entry()
+│   └── typec_cc_change_sink_entry()
+├── [BLOCK] Handle cc-change event (1576-1939)
+│   ├── typec_attach_wait_entry()
+│   ├── typec_detach_wait_entry()
+│   └── tcpc_typec_handle_cc_change()
+├── [BLOCK] Handle timeout event (2131-2465)
+│   └── tcpc_typec_handle_timeout()
+├── [BLOCK] Handle ps-change event (2471-2593)
+│   └── tcpc_typec_handle_ps_change()
+└── [BLOCK] TCPCI TypeC I/F (2673-3056)
+    ├── tcpc_typec_init()
+    ├── tcpc_typec_change_role()
+    └── tcpc_typec_handle_wd/fod/otp()
+```
+
+---
+
+## 핵심 동작 시나리오
+
+### 시나리오 1: Sink 연결 (일반적인 충전 케이블 연결)
+
+1. **초기 상태**: `Unattached.SNK` (Rd 제공)
+2. **이벤트**: CC 핀에서 Rp 감지 (Source 연결)
+3. **처리**: `tcpc_typec_handle_cc_change()` 호출
+4. **상태 전환**: `AttachWait.SNK`
+5. **타이머**: CC 디바운스 타이머 시작
+6. **이벤트**: VBUS 전원 감지
+7. **처리**: `tcpc_typec_handle_ps_change()` 호출
+8. **타이머 만료**: 디바운스 완료
+9. **최종 상태**: `Attached.SNK`
+10. **동작**: VBUS Sink 활성화, 충전 시작
+
+### 시나리오 2: Source 연결 (OTG 디바이스 연결)
+
+1. **초기 상태**: `Unattached.SRC` (Rp 제공)
+2. **이벤트**: CC 핀에서 Rd 감지 (Sink 연결)
+3. **처리**: `tcpc_typec_handle_cc_change()` 호출
+4. **상태 전환**: `AttachWait.SRC`
+5. **타이머**: CC 디바운스 타이머 시작
+6. **타이머 만료**: 디바운스 완료
+7. **최종 상태**: `Attached.SRC`
+8. **동작**: 
+   - VCONN 활성화 (e-marker 케이블 지원)
+   - VBUS Source 활성화 (5V 전원 공급)
+   - OTG 디바이스에 전원 공급
+
+### 시나리오 3: DRP 동작
+
+1. **초기 상태**: `Unattached.SNK` (Rd 제공)
+2. **타이머**: DRP_SRC_TOGGLE 만료
+3. **상태 전환**: `Unattached.SRC` (Rp 제공)
+4. **연결 없음**: 계속 대기
+5. **타이머**: DRP_SRC_TOGGLE 만료
+6. **상태 전환**: `Unattached.SNK` (Rd 제공)
+7. **반복**: Source와 Sink 역할을 교대로 시도
+
+---
+
+## 요약
+
+`tcpci_typec.c`는 USB Type-C 포트의 물리 계층 상태 머신을 구현합니다:
+
+- **3가지 주요 이벤트**: CC 변화, 타임아웃, 전원 상태 변화
+- **12개 이상의 상태**: Unattached, AttachWait, Attached 등
+- **디바운싱**: 안정적인 연결 감지를 위한 타이머 사용
+- **DRP 지원**: Source와 Sink 역할 자동 전환
+- **특수 모드**: Audio Accessory, Debug Accessory, Legacy Cable
+- **보호 기능**: Water Detection, Foreign Object Detection, OTP
+
+이 드라이버는 하드웨어 인터럽트와 타이머를 통해 Type-C 연결을 안정적으로 관리하며, 상위 레이어(USB PD 등)에 연결 상태를 보고합니다.

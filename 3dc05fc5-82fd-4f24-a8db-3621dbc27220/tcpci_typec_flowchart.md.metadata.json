@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_OTHER",
+  "summary": "tcpci_typec.c 파일의 USB Type-C 포트 컨트롤러 상태 머신 플로우 차트와 코드 분석 결과를 포함하는 문서. 주요 이벤트 핸들러, 상태 전환 로직, 그리고 전체 동작 흐름을 Mermaid 다이어그램과 설명으로 제공합니다.",
+  "updatedAt": "2026-02-09T05:06:20.354419501Z"
+}
