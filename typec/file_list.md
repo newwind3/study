@@ -1,0 +1,276 @@
+# TypeC 드라이버 전체 파일 목록
+
+## 파일 개요
+
+- **총 파일 수**: 81개
+- **TCPC 서브시스템**: 66개 파일
+- **MUX 서브시스템**: 13개 파일
+- **최상위 설정 파일**: 2개 (Kconfig, Makefile)
+
+---
+
+## 1. 최상위 파일
+
+| 파일명 | 역할 |
+|--------|------|
+| `Kconfig` | 빌드 설정 옵션 정의 |
+| `Makefile` | 서브디렉토리 빌드 규칙 |
+
+---
+
+## 2. TCPC 서브시스템 파일 (tcpc/)
+
+### 2.1 설정 파일
+
+| 파일명 | 역할 |
+|--------|------|
+| `Kconfig` | TCPC 관련 빌드 옵션 |
+| `Makefile` | TCPC 빌드 규칙 및 오브젝트 정의 |
+
+### 2.2 헤더 파일 (inc/)
+
+| 파일명 | 주요 내용 | 연관 파일 |
+|--------|-----------|-----------|
+| `tcpci_core.h` | TCPC 디바이스 구조체, 플래그 정의 | 모든 TCPC 파일 |
+| `tcpci.h` | TCPC 인터페이스 함수 선언 | tcpci.c, 칩 드라이버 |
+| `tcpm.h` | Type-C Port Manager 인터페이스 | tcpm.c, rt_pd_manager.c |
+| `tcpm_pd.h` | PD 관련 매크로 및 타입 정의 | PD 관련 모든 파일 |
+| `pd_core.h` | PD 코어 구조체 및 매크로 | pd_core.c, PE, DPM |
+| `pd_policy_engine.h` | Policy Engine 함수 선언 | pd_policy_engine*.c |
+| `pd_dpm_core.h` | DPM 구조체 및 함수 | pd_dpm*.c |
+| `pd_dpm_pdo_select.h` | PDO 선택 관련 | pd_dpm_pdo_select.c |
+| `pd_process_evt.h` | 이벤트 처리 함수 | pd_process_evt*.c |
+| `pd_dbg_info.h` | 디버그 정보 매크로 | pd_dbg_info.c |
+| `tcpci_event.h` | 이벤트 타입 정의 | tcpci_event.c |
+| `tcpci_timer.h` | 타이머 ID 정의 | tcpci_timer.c |
+| `tcpci_typec.h` | Type-C 상태 및 함수 | tcpci_typec.c |
+| `tcpci_config.h` | 설정 매크로 | 모든 TCPC 파일 |
+| `tcpci_pd_config.h` | PD 설정 매크로 | PD 관련 파일 |
+| `tcpci_pd30_config.h` | PD 3.0 설정 | PD 3.0 관련 파일 |
+| `std_tcpci_v10.h` | TCPCI 표준 레지스터 정의 | 칩 드라이버 |
+| `mt6360.h` | MT6360 칩 레지스터 | tcpc_mt6360.c |
+| `mt6370.h` | MT6370 칩 레지스터 | tcpc_mt6370.c |
+| `rt1711h.h` | RT1711H 칩 레지스터 | tcpc_rt1711h.c |
+
+### 2.3 코어 파일
+
+| 파일명 | 주요 기능 | 주요 함수 | 연관 파일 |
+|--------|-----------|-----------|-----------|
+| `tcpci_core.c` | TCPC 디바이스 등록/관리 | `tcpc_device_register()`, `register_tcp_dev_notifier()` | 모든 TCPC 파일 |
+| `tcpci_typec.c` | Type-C 상태 머신 | `tcpc_typec_init()`, `typec_transfer_state()` | tcpci_core.c, tcpci.c |
+| `tcpci.c` | TCPC 하드웨어 인터페이스 | `tcpci_set_cc()`, `tcpci_get_cc()` | 칩 드라이버 |
+| `tcpm.c` | Type-C Port Manager | `tcpm_typec_change_role()` | rt_pd_manager.c |
+| `tcpci_alert.c` | 인터럽트 처리 | `tcpci_alert()` | 칩 드라이버 |
+| `tcpci_timer.c` | 타이머 관리 | `tcpc_enable_timer()`, `tcpc_disable_timer()` | tcpci_typec.c, PD 파일 |
+| `tcpci_event.c` | 이벤트 큐 관리 | `tcpc_put_event()` | 모든 이벤트 생성 파일 |
+| `tcpci_late_sync.c` | 지연 동기화 | - | tcpci_core.c |
+
+### 2.4 PD 코어 파일
+
+| 파일명 | 주요 기능 | 주요 함수 | 연관 파일 |
+|--------|-----------|-----------|-----------|
+| `pd_core.c` | PD 프로토콜 코어 | `pd_core_init()`, `pd_parse_pdata()` | PE, DPM |
+| `pd_policy_engine.c` | Policy Engine 메인 | `pd_pe_init()`, `pd_handle_msg()` | PE 서브 파일들 |
+| `pd_dpm_core.c` | Device Policy Manager | `dpm_init()`, VDM 처리 | DPM 서브 파일들 |
+| `pd_dbg_info.c` | 디버그 정보 출력 | `pd_dbg_info()` | 모든 PD 파일 |
+
+### 2.5 Policy Engine 서브 파일
+
+| 파일명 | 역할 | 주요 상태 |
+|--------|------|-----------|
+| `pd_policy_engine_src.c` | Source 정책 | PE_SRC_Startup, PE_SRC_Send_Capabilities, PE_SRC_Ready |
+| `pd_policy_engine_snk.c` | Sink 정책 | PE_SNK_Startup, PE_SNK_Wait_for_Capabilities, PE_SNK_Ready |
+| `pd_policy_engine_dfp.c` | DFP (Downstream Facing Port) | PE_DFP_VDM_Identity_Request |
+| `pd_policy_engine_ufp.c` | UFP (Upstream Facing Port) | PE_UFP_VDM_Get_Identity |
+| `pd_policy_engine_dr.c` | Data Role 공통 | - |
+| `pd_policy_engine_drs.c` | Data Role Swap | PE_DRS_Evaluate_Swap, PE_DRS_Change_to_DFP/UFP |
+| `pd_policy_engine_prs.c` | Power Role Swap | PE_PRS_Evaluate_Swap, PE_PRS_Transition |
+| `pd_policy_engine_vcs.c` | VCONN Swap | PE_VCS_Evaluate_Swap, PE_VCS_Turn_On/Off_VCONN |
+| `pd_policy_engine_dbg.c` | 디버그 액세서리 | PE_DBG_Ready |
+| `pd_policy_engine_com.c` | 공통 함수 | - |
+
+### 2.6 PD 이벤트 처리 파일
+
+| 파일명 | 역할 |
+|--------|------|
+| `pd_process_evt.c` | 이벤트 처리 메인 |
+| `pd_process_evt_src.c` | Source 이벤트 |
+| `pd_process_evt_snk.c` | Sink 이벤트 |
+| `pd_process_evt_vdm.c` | VDM 이벤트 |
+| `pd_process_evt_drs.c` | Data Role Swap 이벤트 |
+| `pd_process_evt_prs.c` | Power Role Swap 이벤트 |
+| `pd_process_evt_vcs.c` | VCONN Swap 이벤트 |
+| `pd_process_evt_dbg.c` | 디버그 이벤트 |
+| `pd_process_evt_tcp.c` | TCPM 이벤트 |
+| `pd_process_evt_com.c` | 공통 이벤트 |
+
+### 2.7 DPM 서브 파일
+
+| 파일명 | 역할 | 주요 기능 |
+|--------|------|-----------|
+| `pd_dpm_alt_mode_dp.c` | DisplayPort Alt Mode | DP 모드 진입, 설정, 상태 업데이트 |
+| `pd_dpm_alt_mode_dc.c` | Direct Charge Alt Mode | DC 모드 관리 |
+| `pd_dpm_uvdm.c` | Unstructured VDM | UVDM 송수신 |
+| `pd_dpm_pdo_select.c` | PDO 선택 | 최적 PDO 선택 알고리즘 |
+| `pd_dpm_reaction.c` | DPM 반응 처리 | 요청에 대한 응답 |
+| `pd_dpm_prv.h` | DPM 내부 헤더 | - |
+
+### 2.8 플랫폼 통합 파일
+
+| 파일명 | 역할 | 주요 기능 |
+|--------|------|-----------|
+| `rt_pd_manager.c` | PD 매니저 | typec framework 연동, Charger 연동, USB role switch |
+
+### 2.9 칩 드라이버
+
+| 파일명 | 칩 모델 | 제조사 |
+|--------|---------|--------|
+| `tcpc_mt6360.c` | MT6360 | MediaTek |
+| `tcpc_mt6362.c` | MT6362 | MediaTek |
+| `tcpc_mt6370.c` | MT6370 | MediaTek |
+| `tcpc_mt6375.c` | MT6375 | MediaTek |
+| `tcpc_rt1711h.c` | RT1711H | Richtek |
+
+---
+
+## 3. MUX 서브시스템 파일 (mux/)
+
+### 3.1 설정 파일
+
+| 파일명 | 역할 |
+|--------|------|
+| `Kconfig` | MUX 관련 빌드 옵션 |
+| `Makefile` | MUX 빌드 규칙 |
+
+### 3.2 코어 파일
+
+| 파일명 | 역할 | 주요 함수 |
+|--------|------|-----------|
+| `mux_switch.c` | MUX/Switch 관리 | `mtk_typec_mux_register()`, `mtk_typec_switch_register()` |
+| `mux_switch.h` | MUX 인터페이스 헤더 | - |
+
+### 3.3 MUX 칩 드라이버
+
+| 파일명 | 칩 모델 | 제조사 | 주요 기능 |
+|--------|---------|--------|-----------|
+| `hd3ss460.c` | HD3SS460 | TI | USB3.1 + DP 스위치 |
+| `ps5169.c` | PS5169 | Parade | USB3.1 + DP ReDriver |
+| `ps5170.c` | PS5170 | Parade | USB3.1 + DP ReDriver |
+| `pi3dpx1205a.c` | PI3DPX1205A | Pericom | USB3.1 + DP 스위치 |
+| `pi3dpx1205a.h` | - | - | PI3DPX1205A 헤더 |
+| `fusb304.c` | FUSB304 | ON Semi | USB Type-C 크로스포인트 스위치 |
+| `it5205fn.c` | IT5205 | ITE | USB3.1 + DP 스위치 |
+| `ptn36241g.c` | PTN36241G | NXP | USB3.1 + DP ReDriver |
+| `usb_dp_selector.c` | - | - | USB/DP 선택 로직 |
+
+---
+
+## 4. 파일 분류 요약
+
+### 4.1 기능별 분류
+
+#### Type-C 연결 관리 (11개)
+- `tcpci_core.c`, `tcpci_typec.c`, `tcpci.c`, `tcpm.c`
+- `tcpci_alert.c`, `tcpci_timer.c`, `tcpci_event.c`
+- `tcpci_late_sync.c`
+- 칩 드라이버 5개
+
+#### PD 프로토콜 (35개)
+- 코어: `pd_core.c`, `pd_policy_engine.c`, `pd_dpm_core.c`
+- Policy Engine: 10개 파일
+- Event Processing: 10개 파일
+- DPM: 6개 파일
+- 디버그: `pd_dbg_info.c`
+- 헤더: 5개
+
+#### MUX/Switch (13개)
+- 코어: `mux_switch.c`, `mux_switch.h`
+- 칩 드라이버: 9개
+- 설정: 2개
+
+#### 플랫폼 통합 (1개)
+- `rt_pd_manager.c`
+
+#### 헤더 파일 (19개)
+- TCPC 관련: 16개
+- MUX 관련: 1개
+- 칩별: 2개
+
+#### 설정 파일 (4개)
+- Kconfig: 3개
+- Makefile: 3개 (중복 제외 시 실제 4개)
+
+### 4.2 크기별 분류
+
+#### 대형 파일 (1000+ 라인)
+- `tcpci_typec.c` (3057 라인)
+- `tcpm.h` (1947 라인)
+- `pd_core.h` (1635 라인)
+- `pd_core.c` (1463 라인)
+- `tcpci_core.c` (1021 라인)
+
+#### 중형 파일 (500-1000 라인)
+- `rt_pd_manager.c` (777 라인)
+- `tcpci_core.h` (733 라인)
+- Policy Engine 관련 파일들
+
+#### 소형 파일 (500 라인 미만)
+- 대부분의 칩 드라이버
+- 헤더 파일들
+- MUX 드라이버들
+
+---
+
+## 5. 주요 파일 간 관계도
+
+```
+tcpci_core.c (중심)
+├── tcpci_typec.c (Type-C 상태 머신)
+│   ├── tcpci.c (하드웨어 제어)
+│   └── 칩 드라이버들
+├── pd_core.c (PD 프로토콜)
+│   ├── pd_policy_engine.c
+│   │   ├── pd_policy_engine_src.c
+│   │   ├── pd_policy_engine_snk.c
+│   │   └── 기타 PE 파일들
+│   ├── pd_dpm_core.c
+│   │   ├── pd_dpm_alt_mode_dp.c
+│   │   └── 기타 DPM 파일들
+│   └── pd_process_evt.c
+│       └── 기타 이벤트 처리 파일들
+├── tcpci_event.c (이벤트 큐)
+├── tcpci_timer.c (타이머)
+└── rt_pd_manager.c (플랫폼 통합)
+    └── mux_switch.c (MUX 관리)
+        └── MUX 칩 드라이버들
+```
+
+---
+
+## 6. 빠른 참조
+
+### 디바이스 등록 관련
+- `tcpci_core.c`: `tcpc_device_register()`
+- 칩 드라이버: `probe()` 함수
+
+### Type-C 연결 처리
+- `tcpci_typec.c`: 상태 머신
+- `tcpci_alert.c`: 인터럽트 처리
+
+### PD 협상
+- `pd_core.c`: 메시지 송수신
+- `pd_policy_engine_snk.c`: Sink 협상
+- `pd_policy_engine_src.c`: Source 협상
+
+### Alternate Mode
+- `pd_dpm_alt_mode_dp.c`: DisplayPort
+- `pd_dpm_core.c`: VDM 관리
+
+### MUX 제어
+- `mux_switch.c`: MUX API
+- MUX 칩 드라이버: 하드웨어 제어
+
+### 플랫폼 통합
+- `rt_pd_manager.c`: typec/charger/USB 연동
+
+이 문서는 TypeC 드라이버의 모든 파일을 체계적으로 정리하여 빠른 참조가 가능하도록 구성되었습니다.
