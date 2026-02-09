@@ -1,3 +1,0 @@
-let l:bm_file_version = 1
-let l:bm_sessions = {'default': {'/home/iriver1/src/nexell/ct10/dev/linux/kernel/kernel-3.4.39/drivers/power/nxe2000-battery.c': [{'sign_idx': 9501, 'line_nr': 367, 'content': 'int g_low_bat_state = 0;'},{'sign_idx': 9500, 'line_nr': 5193, 'content': '				g_gap_count++;'},],}}
-let l:bm_current_session = 'default'
